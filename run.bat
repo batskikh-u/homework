@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
 
-python tests\test_lexer.py
+python tests\test_parser.py
 
 pause
