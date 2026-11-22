@@ -1,137 +1,147 @@
+import json
 import re
 
-from tockens import create_token
+from tokens import create_token
 
 
-def token_name(text, position, line, column):
-    cur_name = ""
+SYMBOLS = {
+    ":": "COLON",
+    ";": "SEMICOLON",
+    ",": "COMMA",
+    ")": "RPAREN",
+    "(": "LPAREN",
+    "+": "PLUS",
+    "-": "MINUS",
+    "?": "EXPR_MARK",
+    "{": "LBRACE",
+    "}": "RBRACE"
+}
 
-    for i in range(position, len(text)):
-        if re.fullmatch(r"[a-zA-Z0-9]", text[i]):
-            cur_name += text[i]
-        else:
+ONE = 1
+TWO = 2
+
+
+def read_name(text, pos, line, column):
+    match = re.match(r"[a-zA-Z][a-zA-Z0-9]*", text[pos:])
+
+    if not match:
+        raise SyntaxError("Некорректное имя")
+
+    value = match.group()
+    token = create_token("NAME", value, line, column)
+
+    return token, pos + len(value), column + len(value)
+
+
+def read_number(text, pos, line, column):
+    match = re.match(r"0[bB][01]+", text[pos:])
+
+    if not match:
+        raise SyntaxError(f"Некорректное число: строка {line}")
+
+    value = match.group()
+    end = pos + len(value)
+
+    if end < len(text) and text[end].isalnum():
+        raise SyntaxError(f"Некорректное число: строка {line}")
+
+    token = create_token("NUMBER", value, line, column)
+    return token, end, column + len(value)
+
+
+def read_string(text, pos, line, column):
+    end = pos + TWO
+    escaped = False
+
+    while end < len(text):
+        char = text[end]
+
+        if char == "\n":
             break
 
-    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9]*", cur_name):
-        return None
+        if char == '"' and not escaped:
+            raw = text[pos + ONE:end + ONE]
 
-    token = create_token("NAME", cur_name, line, column)
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError as error:
+                raise SyntaxError(
+                    f"Некорректная строка: строка {line}"
+                ) from error
 
-    return token, position + len(cur_name), line, column + len(cur_name)
+            length = end + ONE - pos
+            token = create_token("STRING", value, line, column)
+            return token, end + ONE, column + length
 
-
-def token_number(text, position, line, column):
-    cur_number = ""
-
-    for i in range(position, len(text)):
-        if re.fullmatch(r"[01bB]", text[i]):
-            cur_number += text[i]
+        if char == "\\" and not escaped:
+            escaped = True
         else:
-            break
+            escaped = False
 
-    if not re.fullmatch(r"0[bB][01]+", cur_number):
-        return None
+        end += ONE
 
-    token = create_token("NUMBER", cur_number, line, column)
-
-    return token, position + len(cur_number), line, column + len(cur_number)
+    raise SyntaxError(f"Незакрытая строка: строка {line}")
 
 
-def token_string(text, position, line, column):
-    if text[position:position + 2] != '@"':
-        return None
+def read_symbol(text, pos, line, column):
+    if text[pos:pos + TWO] == "#(":
+        token = create_token("ARRAY_START", "#(", line, column)
+        return token, pos + TWO, column + TWO
 
-    cur_string = ""
+    char = text[pos]
 
-    for i in range(position + 2, len(text)):
-        if text[i] != '"':
-            cur_string += text[i]
-        else:
-            break
-    else:
-        return None
+    if char not in SYMBOLS:
+        raise SyntaxError(
+            f"Неизвестный символ {char!r}: "
+            f"строка {line}, столбец {column}"
+        )
 
-    token = create_token("STRING", cur_string, line, column)
-
-    end_position = i + 1
-    end_column = column + end_position - position
-
-    return token, end_position, line, end_column
+    token = create_token(SYMBOLS[char], char, line, column)
+    return token, pos + ONE, column + ONE
 
 
-def token_comment(text, position, line, column):
-    if text[position:position + 2] != "||":
-        return None
+def skip_comment(text, pos, column):
+    while pos < len(text) and text[pos] != "\n":
+        pos += ONE
+        column += ONE
 
-    start = position
-    position += 2
-
-    while position < len(text) and text[position] != "\n":
-        position += 1
-
-    new_column = column + position - start
-
-    return None, position, line, new_column
-
-
-def token_symbol(text, position, line, column):
-    symbols = {
-        ":": "COLON",
-        ";": "SEMICOLON",
-        ",": "COMMA",
-        "#": "ARRAY_MARK",
-        "(": "LPAREN",
-        ")": "RPAREN",
-        "+": "PLUS",
-        "-": "MINUS",
-        "?": "EXPR_MARK",
-        "{": "LBRACE",
-        "}": "RBRACE"
-    }
-    char = text[position]
-    if char not in symbols:
-        return None
-    token = create_token(
-        symbols[char],
-        char,
-        line,
-        column
-    )
-    return token, position + 1, line, column + 1
+    return pos, column
 
 
 def tokenize(text):
     tokens = []
-    position = 0
-    line = 1
-    column = 1
-    while position < len(text):
-        char = text[position]
+    pos = 0
+    line = ONE
+    column = ONE
+
+    while pos < len(text):
+        char = text[pos]
+
         if char in " \t\r":
-            position += 1
-            column += 1
+            pos += ONE
+            column += ONE
             continue
+
         if char == "\n":
-            position += 1
-            line += 1
-            column = 1
+            pos += ONE
+            line += ONE
+            column = ONE
             continue
-        result = None
-        if text[position:position + 2] == "||":
-            result = token_comment(text, position, line, column)
-        elif char.isalpha():
-            result = token_name(text, position, line, column)
+
+        if text[pos:pos + TWO] == "||":
+            pos, column = skip_comment(text, pos, column)
+            continue
+
+        if text[pos:pos + TWO] == '@"':
+            result = read_string(text, pos, line, column)
+        elif char.isascii() and char.isalpha():
+            result = read_name(text, pos, line, column)
         elif char == "0":
-            result = token_number(text, position, line, column)
-        elif char == "@":
-            result = token_string(text, position, line, column)
+            result = read_number(text, pos, line, column)
         else:
-            result = token_symbol(text, position, line, column)
-        if result is None:
-            raise SyntaxError(
-                f"Неизвестный символ {char!r}, "
-                f"строка {line}, столбец {column}")
-        token, position, line, column = result
-        if token is not None:
-            tokens.append(token)
+            result = read_symbol(text, pos, line, column)
+
+        token, pos, column = result
+        tokens.append(token)
+
     return tokens

@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
 
-python tests\test_parser.py
+python -m unittest discover -s tests -p "test_*.py" -v
 
 pause
